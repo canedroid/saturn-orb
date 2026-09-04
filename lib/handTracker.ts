@@ -170,12 +170,12 @@ export class HandTracker {
   private getFistPos3D(landmarks: NormalizedLandmark[]): Point3D {
     // Use wrist as anchor, mirrored X for natural feel
     // X: right = positive (mirrored)
-    // Y: up = negative (screen coords), so negate for "up = positive"
-    // Z: toward camera = negative in MediaPipe, so negate for "toward = positive"
+    // Y: up = positive (screen coords negated)
+    // Z: away from camera (back) = positive, toward camera = negative
     return {
       x: 1 - landmarks[WRIST].x,  // mirrored: right = positive
       y: -landmarks[WRIST].y,     // screen Y down → up = positive
-      z: -(landmarks[WRIST].z ?? 0), // MediaPipe Z away → toward = positive
+      z: landmarks[WRIST].z ?? 0, // MediaPipe: toward = negative, away = positive (back = positive)
     };
   }
 
@@ -258,15 +258,10 @@ export class HandTracker {
           const dy = state.prevPos3D.y - state.refPos3D.y;
           const dz = state.prevPos3D.z - state.refPos3D.z;
           
-          // Magnitude of displacement in the "zoom-in octant" (all positive)
-          // This is naturally normalized: diagonal = same magnitude as axis
-          const zoomDisplacement = Math.sqrt(dx * dx + dy * dy + dz * dz);
-          
-          // Determine sign: positive displacement in any zoom-in axis = zoom in
-          // We use the dot product with the normalized zoom-in direction (1,1,1)/√3
+          // Zoom-in direction: +X (right), +Y (up), +Z (back/away) all zoom in
+          // Dot product with normalized direction (1,1,1)/√3
           const zoomDirectionDot = (dx + dy + dz) / Math.sqrt(3);
           
-          // Use magnitude of projection for normalized speed
           primaryZoomDelta = zoomDirectionDot;
         }
       } else {
@@ -315,12 +310,10 @@ export class HandTracker {
       this.prevGrab = null;
     }
 
-    // Zoom from 3D displacement magnitude (FIST ONLY)
-    // zoomDirectionDot is projection onto (1,1,1) direction
-    // Positive = movement in zoom-in direction, negative = zoom-out direction
+    // Zoom from 3D displacement projection onto (right, up, back) direction
+    // Positive = moved in zoom-in direction (right/up/back) → zoom in (factor < 1)
+    // Negative = moved in zoom-out direction (left/down/forward) → zoom out (factor > 1)
     if (mode === "zoom" && Math.abs(primaryZoomDelta) > ZOOM_DEAD_ZONE) {
-      // zoomDirectionDot > 0 → moved in zoom-in direction → zoom in (factor < 1)
-      // zoomDirectionDot < 0 → moved in zoom-out direction → zoom out (factor > 1)
       const factor = 1 - primaryZoomDelta * ZOOM_SENSITIVITY;
       this.callbacks.onZoom(factor);
     }
