@@ -28,6 +28,7 @@ export default function SaturnOrb() {
   const [camera, setCamera] = useState<CameraState>("off");
   const [status, setStatus] = useState<TrackerStatus>({ hands: 0, mode: "idle", gesture: "none" });
   const [error, setError] = useState<string | null>(null);
+  const [showHud, setShowHud] = useState(true);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -103,6 +104,10 @@ export default function SaturnOrb() {
         case "G":
           toggleGestures();
           break;
+        case "y":
+        case "Y":
+          setShowHud((prev) => !prev);
+          break;
       }
     };
     window.addEventListener("keydown", onKey);
@@ -119,63 +124,70 @@ export default function SaturnOrb() {
       <div className="overlay-grain" />
       <div className="overlay-scanlines" />
 
-      <div className="hud hud-title">SATURN ORB</div>
+      {showHud && (
+        <>
+          <div className="hud hud-title">SATURN ORB</div>
 
-      <div className="hud hud-hint">
-        <div>
-          <span className="key">DRAG</span> spin&nbsp;&nbsp;
-          <span className="key">SCROLL</span> zoom
-        </div>
-        {cameraOn ? (
-          <div>
-            <span className="key">PALM + MOVE</span> rotate&nbsp;&nbsp;
-            <span className="key">FIST</span> zoom 50%
+          <div className="hud hud-hint">
+            <div>
+              <span className="key">DRAG</span> spin&nbsp;&nbsp;
+              <span className="key">SCROLL</span> zoom
+            </div>
+            {cameraOn ? (
+              <div>
+                <span className="key">PALM + MOVE</span> rotate&nbsp;&nbsp;
+                <span className="key">FIST</span> zoom 50%
+              </div>
+            ) : (
+              <div>
+                <span className="key">G</span> hand gestures&nbsp;&nbsp;
+                <span className="key">R</span> reset&nbsp;&nbsp;
+                <span className="key">+/−</span> zoom
+              </div>
+            )}
+            <div>
+              <span className="key">Y</span> toggle HUD
+            </div>
           </div>
-        ) : (
-          <div>
-            <span className="key">G</span> hand gestures&nbsp;&nbsp;
-            <span className="key">R</span> reset&nbsp;&nbsp;
-            <span className="key">+/−</span> zoom
+
+          <div className="hud hud-controls">
+            <div className={`camera-panel${cameraOn ? " visible" : ""}`}>
+              <video ref={videoRef} muted playsInline className="camera-video" />
+              <canvas ref={overlayRef} width={208} height={156} className="camera-overlay" />
+              <div className="camera-status">
+                {status.hands > 0
+                  ? `${status.hands} HAND${status.hands > 1 ? "S" : ""} · ${MODE_LABEL[status.mode]} ${GESTURE_LABEL[status.gesture]}`
+                  : "SHOW HANDS"}
+              </div>
+            </div>
+
+            {error && <div className="hud-error">{error}</div>}
+
+            <div className="hud-row">
+              <button
+                type="button"
+                className="hud-btn"
+                aria-pressed={cameraOn}
+                onClick={toggleGestures}
+                disabled={camera === "starting"}
+              >
+                {camera === "starting" ? "INITIALIZING…" : cameraOn ? "GESTURES ON" : "GESTURES OFF"}
+              </button>
+            </div>
+            <div className="hud-row">
+              <button type="button" className="hud-btn" onClick={() => sceneRef.current?.zoomIn()} aria-label="Zoom in">
+                +
+              </button>
+              <button type="button" className="hud-btn" onClick={() => sceneRef.current?.zoomOut()} aria-label="Zoom out">
+                −
+              </button>
+              <button type="button" className="hud-btn" onClick={() => sceneRef.current?.resetView()}>
+                RESET
+              </button>
+            </div>
           </div>
-        )}
-      </div>
-
-      <div className="hud hud-controls">
-        <div className={`camera-panel${cameraOn ? " visible" : ""}`}>
-          <video ref={videoRef} muted playsInline className="camera-video" />
-          <canvas ref={overlayRef} width={208} height={156} className="camera-overlay" />
-          <div className="camera-status">
-            {status.hands > 0
-              ? `${status.hands} HAND${status.hands > 1 ? "S" : ""} · ${MODE_LABEL[status.mode]} ${GESTURE_LABEL[status.gesture]}`
-              : "SHOW HANDS"}
-          </div>
-        </div>
-
-        {error && <div className="hud-error">{error}</div>}
-
-        <div className="hud-row">
-          <button
-            type="button"
-            className="hud-btn"
-            aria-pressed={cameraOn}
-            onClick={toggleGestures}
-            disabled={camera === "starting"}
-          >
-            {camera === "starting" ? "INITIALIZING…" : cameraOn ? "GESTURES ON" : "GESTURES OFF"}
-          </button>
-        </div>
-        <div className="hud-row">
-          <button type="button" className="hud-btn" onClick={() => sceneRef.current?.zoomIn()} aria-label="Zoom in">
-            +
-          </button>
-          <button type="button" className="hud-btn" onClick={() => sceneRef.current?.zoomOut()} aria-label="Zoom out">
-            −
-          </button>
-          <button type="button" className="hud-btn" onClick={() => sceneRef.current?.resetView()}>
-            RESET
-          </button>
-        </div>
-      </div>
+        </>
+      )}
     </>
   );
 }
