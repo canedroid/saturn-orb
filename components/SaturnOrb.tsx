@@ -26,7 +26,7 @@ export default function SaturnOrb() {
   const trackerRef = useRef<HandTracker | null>(null);
 
   const [camera, setCamera] = useState<CameraState>("off");
-  const [status, setStatus] = useState<TrackerStatus>({ hands: 0, mode: "idle", gesture: "none" });
+  const [status, setStatus] = useState<TrackerStatus>({ hands: 0, mode: "idle", gesture: "none", palmFacing: null });
   const [error, setError] = useState<string | null>(null);
   const [showHud, setShowHud] = useState(true);
 
@@ -47,7 +47,7 @@ export default function SaturnOrb() {
     trackerRef.current?.stop();
     trackerRef.current = null;
     setCamera("off");
-    setStatus({ hands: 0, mode: "idle", gesture: "none" });
+    setStatus({ hands: 0, mode: "idle", gesture: "none", palmFacing: null });
   }, []);
 
   const startGestures = useCallback(async () => {
@@ -128,11 +128,17 @@ export default function SaturnOrb() {
       <div className={`camera-panel${cameraOn ? " visible" : ""} ${showHud ? "" : " hud-hidden"}`}>
         <video ref={videoRef} muted playsInline className="camera-video" />
         <canvas ref={overlayRef} width={208} height={156} className="camera-overlay" />
-        <div className="camera-status">
-          {status.hands > 0
-            ? `${status.hands} HAND${status.hands > 1 ? "S" : ""} · ${MODE_LABEL[status.mode]} ${GESTURE_LABEL[status.gesture]}`
-            : "SHOW HANDS"}
-        </div>
+<div className="camera-status">
+            {status.hands > 0
+              ? `${status.hands} HAND${status.hands > 1 ? "S" : ""} · ${MODE_LABEL[status.mode]} ${
+                  status.gesture === "fist"
+                    ? status.palmFacing
+                      ? "✊ PALM→OUT"
+                      : "✊ BACK→IN"
+                    : GESTURE_LABEL[status.gesture]
+                }`
+              : "SHOW HANDS"}
+          </div>
       </div>
 
       {showHud && (
@@ -147,7 +153,8 @@ export default function SaturnOrb() {
             {cameraOn ? (
               <div>
                 <span className="key">PALM + MOVE</span> rotate&nbsp;&nbsp;
-                <span className="key">FIST</span> zoom 50%
+                <span className="key">FIST (PALM)</span> zoom out&nbsp;&nbsp;
+                <span className="key">FIST (BACK)</span> zoom in
               </div>
             ) : (
               <div>

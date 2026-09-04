@@ -23,6 +23,8 @@ const PINKY_MCP = 17;
 
 const ROTATE_SPEED = 4.5;
 const SMOOTHING = 0.35;
+// Palm facing camera threshold (normal.z > 0 means palm faces camera in MediaPipe coords)
+const PALM_FACING_THRESHOLD = 0;
 
 export type GestureMode = "idle" | "rotate" | "zoom";
 
@@ -30,6 +32,7 @@ export interface TrackerStatus {
   hands: number;
   mode: GestureMode;
   gesture: "none" | "palm" | "fist";
+  palmFacing: boolean | null;
 }
 
 export interface HandTrackerCallbacks {
@@ -47,6 +50,7 @@ interface HandState {
   grab: Point;
   wasPalm: boolean;
   wasFist: boolean;
+  wasPalmFacing: boolean | null;
 }
 
 export class HandTracker {
@@ -63,7 +67,7 @@ export class HandTracker {
   private prevMode: GestureMode = "idle";
   private prevGrab: Point | null = null;
   private fistZoomTriggered = false;
-  private lastStatus: TrackerStatus = { hands: 0, mode: "idle", gesture: "none" };
+  private lastStatus: TrackerStatus = { hands: 0, mode: "idle", gesture: "none", palmFacing: null };
 
   constructor(
     video: HTMLVideoElement,
@@ -119,7 +123,7 @@ export class HandTracker {
     this.fistZoomTriggered = false;
     const ctx = this.overlay.getContext("2d");
     ctx?.clearRect(0, 0, this.overlay.width, this.overlay.height);
-    this.emitStatus({ hands: 0, mode: "idle", gesture: "none" });
+    this.emitStatus({ hands: 0, mode: "idle", gesture: "none", palmFacing: null });
   }
 
   private loop = () => {
@@ -156,6 +160,31 @@ export class HandTracker {
     return curled >= 3 && thumbTucked;
   }
 
+  // Returns true if palm faces camera (normal.z > 0), false if back of hand faces camera
+  private isPalmFacingCamera(landmarks: NormalizedLandmark[]): boolean {
+    // Vectors from wrist to index MCP and wrist to pinky MCP
+    const v1 = {
+      x: landmarks[INDEX_MCP].x - landmarks[WRIST].x,
+      y: landmarks[INDEX_MCP].y - landmarks[WRIST].y,
+      z: (landmarks[INDEX_MCP].z ?? 0) - (landmarks[WRIST].z ?? 0),
+    };
+    const v2 = {
+      x: landmarks[PINKY_MCP].x - landmarks[WRIST].x,
+      y: landmarks[PINKY_MCP].y - landmarks[WRIST].y,
+      z: (landmarks[PINKY_MCP].z ?? 0) - (landmarks[WRIST].z ?? 0),
+    };
+    // Cross product v1 × v2 = palm normal
+    const nx = v1.y * v2.z - v1.z * v2.y;
+    const ny = v1.z * v2.x - v1.x * v2.z;
+    const nz = v1.x * v2.y - v1.y * v2.x;
+    // Normalize
+    const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+    if (len === 0) return true;
+    const normalZ = nz / len;
+    // In MediaPipe coords with facingMode="user" (mirrored), positive Z = toward camera
+    return normalZ > PALM_FACING_THRESHOLD;
+  }
+
   private processHands(
     landmarks: NormalizedLandmark[][],
     labels: string[],
@@ -182,7 +211,7 @@ export class HandTracker {
 
       let state = this.handStates.get(label);
       if (!state) {
-        state = { grab: raw, wasPalm: false, wasFist: false };
+        state = { grab: raw, wasPalm: false, wasFist: false, wasPalmFacing: null };
         this.handStates.set(label, state);
       }
 
@@ -195,13 +224,20 @@ export class HandTracker {
         this.prevMode = "rotate";
         this.prevGrab = { ...state.grab };
       }
+      // Fist detection with palm orientation
+      const palmFacing = this.isPalmFacingCamera(lm);
       if (isFist && !state.wasFist && !this.fistZoomTriggered) {
         this.fistZoomTriggered = true;
-        this.callbacks.onZoom(0.5);
+        state.wasPalmFacing = palmFacing;
+        // Palm facing camera + fist = zoom OUT (factor > 1)
+        // Back of hand facing camera + fist = zoom IN (factor < 1)
+        this.callbacks.onZoom(palmFacing ? 2.0 : 0.5);
       }
       if (!isFist && state.wasFist && this.fistZoomTriggered) {
         this.fistZoomTriggered = false;
-        this.callbacks.onZoom(2.0);
+        // Release fist: reverse the zoom
+        const facing = state.wasPalmFacing ?? true;
+        this.callbacks.onZoom(facing ? 0.5 : 2.0);
       }
 
       state.wasPalm = isPalm;
@@ -243,14 +279,15 @@ export class HandTracker {
       this.prevGrab = null;
     }
 
-    this.emitStatus({ hands: landmarks.length, mode, gesture });
+    this.emitStatus({ hands: landmarks.length, mode, gesture, palmFacing: fistCount > 0 ? (this.handStates.values().next().value?.wasPalmFacing ?? null) : null });
   }
 
   private emitStatus(status: TrackerStatus): void {
     if (
       status.hands !== this.lastStatus.hands ||
       status.mode !== this.lastStatus.mode ||
-      status.gesture !== this.lastStatus.gesture
+      status.gesture !== this.lastStatus.gesture ||
+      status.palmFacing !== this.lastStatus.palmFacing
     ) {
       this.lastStatus = status;
       this.callbacks.onStatus(status);
@@ -266,8 +303,14 @@ export class HandTracker {
     for (const lm of landmarks) {
       const palm = this.isPalm(lm);
       const fist = this.isFist(lm);
+      const palmFacing = fist ? this.isPalmFacingCamera(lm) : null;
 
-      const color = fist ? "#ff6666" : palm ? "#88ff88" : "rgba(255,255,255,0.4)";
+      // Fist: red if palm facing, orange if back facing
+      // Palm: green
+      // Default: white
+      let color = "rgba(255,255,255,0.4)";
+      if (fist) color = palmFacing ? "#ff6666" : "#ffaa44";
+      else if (palm) color = "#88ff88";
       const lineWidth = fist || palm ? 3 : 1;
 
       const connections = [
@@ -302,7 +345,13 @@ export class HandTracker {
         ctx.fill();
       }
 
-      const label = fist ? "FIST" : palm ? "PALM" : "";
+      const label = fist
+        ? this.isPalmFacingCamera(lm)
+          ? "FIST (PALM)"
+          : "FIST (BACK)"
+        : palm
+        ? "PALM"
+        : "";
       if (label) {
         ctx.fillStyle = color;
         ctx.font = "bold 14px monospace";
