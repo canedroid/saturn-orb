@@ -24,10 +24,10 @@ const PINKY_MCP = 17;
 const ROTATE_SPEED = 4.5;
 const SMOOTHING = 0.35;
 
-// Zoom via Z-axis (hand depth)
-const ZOOM_SENSITIVITY = 12.0;
-const Z_DEAD_ZONE = 0.0015;
-const Z_SMOOTHING = 0.7;
+// 3D Zoom via fist position (X right, Y up, Z toward camera all zoom in)
+const ZOOM_SENSITIVITY = 8.0;
+const ZOOM_DEAD_ZONE = 0.008;
+const POSITION_SMOOTHING = 0.5;
 
 export type GestureMode = "idle" | "rotate" | "zoom";
 
@@ -48,10 +48,16 @@ interface Point {
   y: number;
 }
 
+interface Point3D {
+  x: number;
+  y: number;
+  z: number;
+}
+
 interface HandState {
   grab: Point;
-  prevZ: number | null;
-  zVelocity: number;
+  prevPos3D: Point3D | null;
+  refPos3D: Point3D | null;  // Reference position when fist started
   wasFist: boolean;
   wasPalm: boolean;
 }
@@ -161,6 +167,18 @@ export class HandTracker {
     return curled >= 3 && thumbTucked;
   }
 
+  private getFistPos3D(landmarks: NormalizedLandmark[]): Point3D {
+    // Use wrist as anchor, mirrored X for natural feel
+    // X: right = positive (mirrored)
+    // Y: up = negative (screen coords), so negate for "up = positive"
+    // Z: toward camera = negative in MediaPipe, so negate for "toward = positive"
+    return {
+      x: 1 - landmarks[WRIST].x,  // mirrored: right = positive
+      y: -landmarks[WRIST].y,     // screen Y down → up = positive
+      z: -(landmarks[WRIST].z ?? 0), // MediaPipe Z away → toward = positive
+    };
+  }
+
   private processHands(
     landmarks: NormalizedLandmark[][],
     labels: string[],
@@ -169,7 +187,7 @@ export class HandTracker {
     let palmCount = 0;
     let fistCount = 0;
     let primaryGrab: Point | null = null;
-    let primaryZVelocity = 0;
+    let primaryZoomDelta = 0;
 
     landmarks.forEach((lm: NormalizedLandmark[], i: number) => {
       const label = labels[i];
@@ -187,12 +205,12 @@ export class HandTracker {
         y: (lm[INDEX_TIP].y + lm[MIDDLE_TIP].y) / 2,
       };
 
-      // Z from wrist (MediaPipe: closer to camera = smaller Z)
-      const currentZ = lm[WRIST].z ?? 0;
+      // 3D position for fist zoom
+      const currentPos3D = this.getFistPos3D(lm);
 
       let state = this.handStates.get(label);
       if (!state) {
-        state = { grab: raw, prevZ: currentZ, zVelocity: 0, wasFist: false, wasPalm: false };
+        state = { grab: raw, prevPos3D: currentPos3D, refPos3D: null, wasFist: false, wasPalm: false };
         this.handStates.set(label, state);
       }
 
@@ -202,10 +220,16 @@ export class HandTracker {
         y: state.grab.y + (raw.y - state.grab.y) * SMOOTHING,
       };
 
-      // Smooth Z velocity
-      const rawZDelta = state.prevZ !== null ? currentZ - state.prevZ : 0;
-      state.zVelocity = state.zVelocity * Z_SMOOTHING + rawZDelta * (1 - Z_SMOOTHING);
-      state.prevZ = currentZ;
+      // Smooth 3D position
+      if (state.prevPos3D) {
+        state.prevPos3D = {
+          x: state.prevPos3D.x + (currentPos3D.x - state.prevPos3D.x) * POSITION_SMOOTHING,
+          y: state.prevPos3D.y + (currentPos3D.y - state.prevPos3D.y) * POSITION_SMOOTHING,
+          z: state.prevPos3D.z + (currentPos3D.z - state.prevPos3D.z) * POSITION_SMOOTHING,
+        };
+      } else {
+        state.prevPos3D = { ...currentPos3D };
+      }
 
       // Palm starts/stays in rotation mode
       if (isPalm) {
@@ -218,17 +242,44 @@ export class HandTracker {
         }
       }
 
-      // Fist starts zoom mode (Z-axis only)
+      // Fist zoom mode (3D position-based)
       if (isFist) {
-        if (!state.wasFist && this.prevMode === "idle") {
-          this.prevMode = "zoom";
+        if (!state.wasFist) {
+          // First frame of fist: set reference position
+          state.refPos3D = { ...state.prevPos3D };
+          if (this.prevMode === "idle") {
+            this.prevMode = "zoom";
+          }
         }
-        // Track Z velocity for zoom, but don't track X/Y for rotation
-        primaryZVelocity = state.zVelocity;
+        // Compute displacement from reference in zoom-in direction
+        // Zoom-in direction: +X (right), +Y (up), +Z (toward camera) all zoom in
+        if (state.refPos3D && state.prevPos3D) {
+          const dx = state.prevPos3D.x - state.refPos3D.x;
+          const dy = state.prevPos3D.y - state.refPos3D.y;
+          const dz = state.prevPos3D.z - state.refPos3D.z;
+          
+          // Magnitude of displacement in the "zoom-in octant" (all positive)
+          // This is naturally normalized: diagonal = same magnitude as axis
+          const zoomDisplacement = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          
+          // Determine sign: positive displacement in any zoom-in axis = zoom in
+          // We use the dot product with the normalized zoom-in direction (1,1,1)/√3
+          const zoomDirectionDot = (dx + dy + dz) / Math.sqrt(3);
+          
+          // Use magnitude of projection for normalized speed
+          primaryZoomDelta = zoomDirectionDot;
+        }
+      } else {
+        // Fist released: clear reference
+        state.refPos3D = null;
       }
 
       state.wasPalm = isPalm;
       state.wasFist = isFist;
+
+      if (isPalm && this.prevMode === "rotate") {
+        primaryGrab = state.grab;
+      }
     });
 
     // Clean up lost hands
@@ -264,11 +315,13 @@ export class HandTracker {
       this.prevGrab = null;
     }
 
-    // Zoom from Z velocity (FIST ONLY)
-    if (mode === "zoom" && Math.abs(primaryZVelocity) > Z_DEAD_ZONE) {
-      // Z decreases (negative) = hand moving toward camera = zoom IN (factor < 1)
-      // Z increases (positive) = hand moving away = zoom OUT (factor > 1)
-      const factor = 1 - primaryZVelocity * ZOOM_SENSITIVITY;
+    // Zoom from 3D displacement magnitude (FIST ONLY)
+    // zoomDirectionDot is projection onto (1,1,1) direction
+    // Positive = movement in zoom-in direction, negative = zoom-out direction
+    if (mode === "zoom" && Math.abs(primaryZoomDelta) > ZOOM_DEAD_ZONE) {
+      // zoomDirectionDot > 0 → moved in zoom-in direction → zoom in (factor < 1)
+      // zoomDirectionDot < 0 → moved in zoom-out direction → zoom out (factor > 1)
+      const factor = 1 - primaryZoomDelta * ZOOM_SENSITIVITY;
       this.callbacks.onZoom(factor);
     }
 
@@ -333,7 +386,7 @@ export class HandTracker {
         ctx.fill();
       }
 
-      const label = fist ? "FIST (ZOOM)" : palm ? "PALM (ROTATE)" : "";
+      const label = fist ? "FIST (3D ZOOM)" : palm ? "PALM (ROTATE)" : "";
       if (label) {
         ctx.fillStyle = color;
         ctx.font = "bold 14px monospace";
