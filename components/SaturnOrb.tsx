@@ -147,7 +147,6 @@ export default function SaturnOrb() {
             {cameraOn ? (
               <div>
                 <span className="key">PALM + MOVE</span> rotate&nbsp;&nbsp;
-                <span className="key">FIST + MOVE</span> rotate&nbsp;&nbsp;
                 <span className="key">FIST + PUSH/PULL</span> zoom in/out
               </div>
             ) : (

@@ -53,6 +53,7 @@ interface HandState {
   prevZ: number | null;
   zVelocity: number;
   wasFist: boolean;
+  wasPalm: boolean;
 }
 
 export class HandTracker {
@@ -191,7 +192,7 @@ export class HandTracker {
 
       let state = this.handStates.get(label);
       if (!state) {
-        state = { grab: raw, prevZ: currentZ, zVelocity: 0, wasFist: false };
+        state = { grab: raw, prevZ: currentZ, zVelocity: 0, wasFist: false, wasPalm: false };
         this.handStates.set(label, state);
       }
 
@@ -206,29 +207,28 @@ export class HandTracker {
       state.zVelocity = state.zVelocity * Z_SMOOTHING + rawZDelta * (1 - Z_SMOOTHING);
       state.prevZ = currentZ;
 
-      // Palm starts rotation mode
-      if (isPalm && !state.wasFist && this.prevMode === "idle") {
-        this.prevMode = "rotate";
-        this.prevGrab = { ...state.grab };
-      }
-
-      // Fist: simultaneous rotate + zoom via Z
-      if (isFist) {
-        if (this.prevMode === "rotate" || this.prevMode === "zoom") {
-          primaryGrab = state.grab;
-          primaryZVelocity = state.zVelocity;
-        }
-        if (this.prevMode === "idle") {
-          this.prevMode = "zoom";
+      // Palm starts/stays in rotation mode
+      if (isPalm) {
+        if (!state.wasPalm && this.prevMode === "idle") {
+          this.prevMode = "rotate";
           this.prevGrab = { ...state.grab };
         }
+        if (this.prevMode === "rotate") {
+          primaryGrab = state.grab;
+        }
       }
 
+      // Fist starts zoom mode (Z-axis only)
+      if (isFist) {
+        if (!state.wasFist && this.prevMode === "idle") {
+          this.prevMode = "zoom";
+        }
+        // Track Z velocity for zoom, but don't track X/Y for rotation
+        primaryZVelocity = state.zVelocity;
+      }
+
+      state.wasPalm = isPalm;
       state.wasFist = isFist;
-
-      if (isPalm && this.prevMode === "rotate") {
-        primaryGrab = state.grab;
-      }
     });
 
     // Clean up lost hands
@@ -250,8 +250,8 @@ export class HandTracker {
       this.prevGrab = null;
     }
 
-    // Rotation from X/Y grab delta
-    if ((mode === "rotate" || mode === "zoom") && primaryGrab && this.prevGrab) {
+    // Rotation from X/Y grab delta (PALM ONLY)
+    if (mode === "rotate" && primaryGrab && this.prevGrab) {
       const grab: Point = primaryGrab;
       const prev: Point = this.prevGrab;
       const dx = grab.x - prev.x;
@@ -260,11 +260,11 @@ export class HandTracker {
         this.callbacks.onRotate(dx * ROTATE_SPEED, dy * ROTATE_SPEED);
       }
       this.prevGrab = { x: grab.x, y: grab.y };
-    } else if (mode === "idle") {
+    } else if (mode !== "rotate") {
       this.prevGrab = null;
     }
 
-    // Zoom from Z velocity (only when fist held)
+    // Zoom from Z velocity (FIST ONLY)
     if (mode === "zoom" && Math.abs(primaryZVelocity) > Z_DEAD_ZONE) {
       // Z decreases (negative) = hand moving toward camera = zoom IN (factor < 1)
       // Z increases (positive) = hand moving away = zoom OUT (factor > 1)
@@ -333,7 +333,7 @@ export class HandTracker {
         ctx.fill();
       }
 
-      const label = fist ? "FIST" : palm ? "PALM" : "";
+      const label = fist ? "FIST (ZOOM)" : palm ? "PALM (ROTATE)" : "";
       if (label) {
         ctx.fillStyle = color;
         ctx.font = "bold 14px monospace";
