@@ -124,6 +124,17 @@ export default function SaturnOrb() {
       <div className="overlay-grain" />
       <div className="overlay-scanlines" />
 
+      {/* Video/canvas always in DOM for tracker, hidden via CSS when not needed */}
+      <div className={`camera-panel${cameraOn ? " visible" : ""} ${showHud ? "" : " hud-hidden"}`}>
+        <video ref={videoRef} muted playsInline className="camera-video" />
+        <canvas ref={overlayRef} width={208} height={156} className="camera-overlay" />
+        <div className="camera-status">
+          {status.hands > 0
+            ? `${status.hands} HAND${status.hands > 1 ? "S" : ""} · ${MODE_LABEL[status.mode]} ${GESTURE_LABEL[status.gesture]}`
+            : "SHOW HANDS"}
+        </div>
+      </div>
+
       {showHud && (
         <>
           <div className="hud hud-title">SATURN ORB</div>
@@ -151,16 +162,6 @@ export default function SaturnOrb() {
           </div>
 
           <div className="hud hud-controls">
-            <div className={`camera-panel${cameraOn ? " visible" : ""}`}>
-              <video ref={videoRef} muted playsInline className="camera-video" />
-              <canvas ref={overlayRef} width={208} height={156} className="camera-overlay" />
-              <div className="camera-status">
-                {status.hands > 0
-                  ? `${status.hands} HAND${status.hands > 1 ? "S" : ""} · ${MODE_LABEL[status.mode]} ${GESTURE_LABEL[status.gesture]}`
-                  : "SHOW HANDS"}
-              </div>
-            </div>
-
             {error && <div className="hud-error">{error}</div>}
 
             <div className="hud-row">

@@ -196,6 +196,10 @@ body {
   display: block;
 }
 
+.camera-panel.hud-hidden {
+  display: none;
+}
+
 .camera-video {
   position: absolute;
   inset: 0;
